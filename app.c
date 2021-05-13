@@ -62,7 +62,7 @@
 SL_BT_API_DEFINE();
 
 // The advertising set handle allocated from Bluetooth stack.
-static uint8_t advertising_set_handle = 0xff;
+//static uint8_t advertising_set_handle = 0xff;
 
 static void uart_tx_wrapper(uint32_t len, uint8_t *data);
 
@@ -71,12 +71,32 @@ static void tcp_tx_wrapper(uint32_t len, uint8_t *data);
 typedef struct {
   bd_addr	address;
   uint8_t	address_type;
+  uint8_t connection;
 }CONN_DEVICES;
 
 static CONN_DEVICES Connectable_Devices_Array[40];
 static uint8_t Connectable_Devices_Counter = 0;
+static uint8_t Connected_Devices_Counter = 0;
+static uint8_t Connecting_Devices_Counter = 0;
+static uint8_t ConInnProcessTimeCounter = 0;
 
-#define MAX_NUMBER_OF_CONNECTABLE_DEVICES 35
+#define MAX_NUMBER_OF_CONNECTABLE_DEVICES 40
+#define MAX_NUMBER_OF_CONNECTIONS 32
+
+#define CENTRAL_SOFTTIMER_HANDLER 0xFE
+
+typedef enum CentralStages
+{
+      Disabled,
+      Scanning,
+      Scanning_Completed,
+      Connecting_Devices,
+      Connection_in_Process,
+      Connections_Completed,
+      Collecting_Data
+}CENTRALSTAGES;
+
+CENTRALSTAGES Central_State = Disabled;
 typedef struct {
   uint16_t connection_handle;   //This is used for connection handle for connection oriented, and for sync handle for connection less mode
   bd_addr address;
@@ -88,11 +108,11 @@ typedef struct {
 } conn_properties_t;
 
 
-#define AD_FIELD_I 0x06
-#define AD_FIELD_C 0x07
+//#define AD_FIELD_I 0x06
+//#define AD_FIELD_C 0x07
 
 #define SERVICE_UUID_LEN 2
-static const uint8_t cte_service[SERVICE_UUID_LEN] = { 0x9, 0x18 };
+//static const uint8_t cte_service[SERVICE_UUID_LEN] = { 0x9, 0x18 };
 
 const char DEVICE_NAME_STRING[] = "Silabsxx:xx";
 
@@ -187,6 +207,51 @@ void app_process_action(void)
   /////////////////////////////////////////////////////////////////////////////
 }
 
+
+
+void Change_Central_State(CENTRALSTAGES Temp_Central_State)
+{
+  switch (Temp_Central_State)
+  {
+    case Disabled:
+      Central_State = Disabled;
+      printf("Central_State = Disabled\n\r");
+    break;
+
+    case Scanning:
+      Central_State = Scanning;
+      printf("Central_State = Scanning\n\r");
+    break;
+
+    case Scanning_Completed:
+      Central_State = Scanning_Completed;
+      printf("Central_State = Scanning_Completed\n\r");
+    break;
+
+    case Connecting_Devices:
+      Central_State = Connecting_Devices;
+      printf("Central_State = Connecting_Devices\n\r");
+    break;
+
+    case Connection_in_Process:
+      Central_State = Connection_in_Process;
+      printf("Central_State = Connection_in_Process\n\r");
+    break;
+
+    case Connections_Completed:
+      Central_State = Connections_Completed;
+      printf("Central_State = Connections_Completed\n\r");
+    break;
+
+    case Collecting_Data:
+      Central_State = Collecting_Data;
+      printf("Central_State = Collecting_Data\n\r");
+    break;
+
+  }
+
+}
+
 //To Connection//sl_bt_connection_open(00:0b:57:b5:f1:dd, 0, 1)
 
 //sl_bt_gatt_set_characteristic_notification(1, 24, 2)
@@ -216,7 +281,7 @@ static int process_scan_response(struct sl_bt_evt_scanner_scan_report_s *pResp) 
         }
         break;
       }
-      else printf(" NO MF Match \n\r");
+      else printf(" NO Match \n\r");
     }
     // Jump to next AD record
     i = i + adLen + 1;
@@ -225,39 +290,10 @@ static int process_scan_response(struct sl_bt_evt_scanner_scan_report_s *pResp) 
   return (adMatchFound);
 }
 
-// uint8_t find_service_in_advertisement(uint8_t *advdata, uint8_t advlen, uint8_t *service_uuid)
-// {
-//   uint8_t ad_field_length;
-//   uint8_t ad_field_type;
-//   uint8_t *ad_uuid_field;
-//   uint32_t i = 0;
-//   uint32_t next_ad_structure;
-//   uint8_t ret = 0;
-//
-//   // Parse advertisement packet
-//   while (i < advlen) {
-//     ad_field_length = advdata[i];
-//     ad_field_type = advdata[i + 1];
-//     next_ad_structure = i + ad_field_length + 1;
-//     // incomplete or complete UUIDs
-//     if (ad_field_type == AD_FIELD_I || ad_field_type == AD_FIELD_C) {
-//       // compare UUID to the service UUID to be found
-//       for (ad_uuid_field = advdata + i + 2; ad_uuid_field < advdata + next_ad_structure; ad_uuid_field += SERVICE_UUID_LEN) {
-//         if (memcmp(ad_uuid_field, service_uuid, SERVICE_UUID_LEN) == 0) {
-//           ret = 1;
-//           break;
-//         }
-//       }
-//       if (ret == 1) {
-//         break;
-//       }
-//     }
-//     // advance to the next AD struct
-//     i = next_ad_structure;
-//   }
-//   return ret;
-// }
-
+void printDeviceAddress(bd_addr address)
+{
+  printf("%2x:%2x:%2x:%2x:%2x:%2x \n\r",address.addr[5],address.addr[4],address.addr[3],address.addr[2],address.addr[1],address.addr[0]);
+}
 /**************************************************************************//**
  * Bluetooth stack event handler.
  * This overrides the dummy weak implementation.
@@ -266,9 +302,9 @@ static int process_scan_response(struct sl_bt_evt_scanner_scan_report_s *pResp) 
  *****************************************************************************/
 void sl_bt_on_event(sl_bt_msg_t *evt)
 {
-  sl_status_t sc;
-  uint8_t conn_handle;
-  conn_properties_t* conn;
+  //sl_status_t sc;
+  //uint8_t conn_handle;
+  //conn_properties_t* conn;
 
 
 
@@ -285,10 +321,15 @@ void sl_bt_on_event(sl_bt_msg_t *evt)
               evt->data.evt_system_boot.build);
 
       Connectable_Devices_Counter = 0;
+      Connected_Devices_Counter = 0;
+      Central_State = Disabled;
 
-      //sl_bt_scanner_set_timing(1,0xff,0xff);
-      sl_bt_system_set_soft_timer(5*32768, 0xFE, 1);
+      //Set a continuous Timer to drive the Central App State Machine
+      sl_bt_system_set_soft_timer(1*32768, CENTRAL_SOFTTIMER_HANDLER, 0);
       sl_bt_scanner_start(1, 1);
+
+      Change_Central_State(Scanning);
+
 
       break;
 
@@ -296,17 +337,9 @@ void sl_bt_on_event(sl_bt_msg_t *evt)
         // Check if the tag is whitelisted
       {
 
-
-        //printf("Number of devices found %d \n\r",sizeof(evt->data.evt_scanner_scan_report.address.addr) );
-
-        // printf("\n\r address ---> ");
-        // for(uint8_t i=0; i< 6; i++) {
-        //   printf("%02x", evt->data.evt_scanner_scan_report.address.addr[i]);
-        // }
-
         process_scan_response(&(evt->data.evt_scanner_scan_report));
 
-        if (Connectable_Devices_Counter >= MAX_NUMBER_OF_CONNECTABLE_DEVICES)
+        if (Connectable_Devices_Counter == MAX_NUMBER_OF_CONNECTABLE_DEVICES+1)
         {
           sl_bt_scanner_stop();
           printf("Final count on Connectable devices %d\n\r",Connectable_Devices_Counter+1);
@@ -314,58 +347,79 @@ void sl_bt_on_event(sl_bt_msg_t *evt)
 
           for (uint8_t i =0 ; i<MAX_NUMBER_OF_CONNECTABLE_DEVICES-1; i++)
           {
-            printf("%2x:%2x:%2x:%2x:%2x:%2x \n\r",Connectable_Devices_Array[i].address.addr[5],Connectable_Devices_Array[i].address.addr[4],Connectable_Devices_Array[i].address.addr[3],Connectable_Devices_Array[i].address.addr[2],Connectable_Devices_Array[i].address.addr[1],Connectable_Devices_Array[i].address.addr[0]);
+            printDeviceAddress(Connectable_Devices_Array[i].address);
+            //printf("%2x:%2x:%2x:%2x:%2x:%2x \n\r",Connectable_Devices_Array[i].address.addr[5],Connectable_Devices_Array[i].address.addr[4],Connectable_Devices_Array[i].address.addr[3],Connectable_Devices_Array[i].address.addr[2],Connectable_Devices_Array[i].address.addr[1],Connectable_Devices_Array[i].address.addr[0]);
           }
+
+          Change_Central_State(Scanning_Completed);
         }
 
 
-        // if (process_scan_response(&(evt->data.evt_scanner_scan_report))==1)
-        // {
-        //   if (Connectable_Devices_Counter < 32)
-        //   {
-        //     Connectable_Devices_Array[Connectable_Devices_Counter].address = evt->data.evt_scanner_scan_report.address;
-        //     Connectable_Devices_Array[Connectable_Devices_Counter].address_type = evt->data.evt_scanner_scan_report.address_type;
-        //     printf("Connectable devices found %d",Connectable_Devices_Counter);
-        //     Connectable_Devices_Counter++;
-        //   }
-        // }
-
-            //
-            // sc = sl_bt_connection_open(evt->data.evt_scanner_scan_report.address,
-            //                            evt->data.evt_scanner_scan_report.address_type,
-            //                            gap_1m_phy, &conn_handle);
-            // app_assert(sc == SL_STATUS_OK || sc == SL_STATUS_INVALID_STATE,
-            //            "[E: 0x%04x] Failed to open connection\n",
-            //            (int)sc);
-
-
-        //}
       }
         break;
 
     case sl_bt_evt_system_soft_timer_id:
-      sl_bt_scanner_stop();
+
+    if (evt->data.evt_system_soft_timer.handle == CENTRAL_SOFTTIMER_HANDLER)
+           {
+             if (Central_State == Scanning_Completed)
+             {
+               Change_Central_State(Connecting_Devices);
+               Connected_Devices_Counter = 0;
+               Connecting_Devices_Counter = 0;
+
+             }
+             //It connects to devices on the connectable devices list
+             if ((Connected_Devices_Counter <= MAX_NUMBER_OF_CONNECTIONS) && (Central_State == Connecting_Devices))
+             {
+
+               sl_bt_connection_open(Connectable_Devices_Array[Connecting_Devices_Counter].address, Connectable_Devices_Array[Connecting_Devices_Counter].address_type, 1,&Connectable_Devices_Array[Connecting_Devices_Counter].connection);
+               Change_Central_State(Connection_in_Process);
+               ConInnProcessTimeCounter = 0;
+             }
+
+             //If Stuck trying to connect
+             if ((Central_State == Connection_in_Process)&&(ConInnProcessTimeCounter++ == 4))
+             {
+               //uint8_t temp = Connecting_Devices_Counter + 1;
+               printf("Device Skiped ");
+               printDeviceAddress(Connectable_Devices_Array[Connecting_Devices_Counter].address);
+               Connecting_Devices_Counter++;
+
+               //sl_bt_connection_open(Connectable_Devices_Array[temp].address, Connectable_Devices_Array[temp].address_type, 1,&Connectable_Devices_Array[temp].connection);
+               sl_bt_connection_open(Connectable_Devices_Array[Connecting_Devices_Counter].address, Connectable_Devices_Array[Connecting_Devices_Counter].address_type, 1,&Connectable_Devices_Array[Connecting_Devices_Counter].connection);
+               ConInnProcessTimeCounter = 0;
+             }
+
+
+           }
+      //sl_bt_scanner_stop();
 
       break;
     // -------------------------------
     // This event indicates that a new connection was opened.
     case sl_bt_evt_connection_opened_id:
-      app_log("Connection opened\n");
+      app_log("Connection opened %d\n", Connected_Devices_Counter++);
+
+      if (Connected_Devices_Counter <= MAX_NUMBER_OF_CONNECTIONS)
+      {
+        Change_Central_State(Connecting_Devices);
+      }
+      else
+      {
+        Change_Central_State(Connections_Completed);
+
+      }
+      Connecting_Devices_Counter++;
       break;
 
     // -------------------------------
     // This event indicates that a connection was closed.
     case sl_bt_evt_connection_closed_id:
       app_log("Connection closed\n");
+      Connected_Devices_Counter--;
       // Restart advertising after client has disconnected.
-      sc = sl_bt_advertiser_start(
-        advertising_set_handle,
-        advertiser_general_discoverable,
-        advertiser_connectable_scannable);
-      app_assert(sc == SL_STATUS_OK,
-                 "[E: 0x%04x] Failed to start advertising\n",
-                 (int)sc);
-      app_log("Started advertising\n");
+
       break;
 
     ///////////////////////////////////////////////////////////////////////////
